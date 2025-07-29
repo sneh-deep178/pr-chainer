@@ -229,6 +229,60 @@ incrementLines = 100      // Threshold increase amount
 - 📋 Commit message templates
 - 🏷️ Automatic tagging and versioning
 
+## 📝 **TODO**
+
+### **🚧 Planned Features**
+
+#### **🌟 High Priority**
+- [ ] **VS Code Extension** - Port to Visual Studio Code for broader IDE support
+- [ ] **User Settings Panel** - Configurable threshold, cooldown, and behavior settings
+- [ ] **Branch Template System** - Customizable branch naming patterns
+- [ ] **Commit Message Templates** - Pre-defined commit message formats
+
+#### **🎯 Medium Priority**
+- [ ] **GitHub Integration** - Automatic PR creation with linked chains
+- [ ] **GitLab Integration** - Merge request automation
+- [ ] **Bitbucket Integration** - Pull request workflow support
+- [ ] **Conflict Resolution UI** - Better handling of merge conflicts
+- [ ] **Usage Analytics** - Track productivity improvements
+
+#### **🔮 Future Enhancements**
+- [ ] **AI-Powered Suggestions** - Smart commit message generation
+- [ ] **Code Review Integration** - Inline comments and feedback
+- [ ] **Team Collaboration** - Shared branch strategies and workflows
+- [ ] **Performance Metrics** - PR review time tracking
+- [ ] **Custom Webhooks** - Integration with external tools
+
+### **🏗️ Technical Debt**
+- [ ] **Unit Test Coverage** - Comprehensive test suite
+- [ ] **Integration Tests** - End-to-end workflow testing
+- [ ] **Performance Optimization** - Git operation caching
+- [ ] **Error Recovery** - Better handling of Git command failures
+- [ ] **Accessibility** - Screen reader and keyboard navigation support
+
+### **🌍 Cross-Platform Support**
+
+#### **Current Support**
+- ✅ **JetBrains IDEs** (IntelliJ, GoLand, PhpStorm, WebStorm, etc.)
+- ✅ **Windows, macOS, Linux** (via JetBrains platform)
+
+#### **Planned Support**
+- [ ] **Visual Studio Code** - JavaScript/TypeScript extension
+- [ ] **Vim/Neovim** - Lua plugin
+- [ ] **Emacs** - Elisp package
+- [ ] **Sublime Text** - Python plugin
+- [ ] **Atom** - JavaScript package (if still relevant)
+
+### **📱 Additional Platforms**
+- [ ] **GitHub Codespaces** - Cloud development environment support
+- [ ] **GitPod** - Browser-based IDE integration
+- [ ] **Replit** - Online code editor support
+- [ ] **CodeSandbox** - Web-based development platform
+
+---
+
+**Note**: VS Code extension would require a complete rewrite in TypeScript/JavaScript but would follow the same core logic and user experience patterns established in this JetBrains plugin.
+
 ## 🤝 **Contributing**
 
 We welcome contributions! Please see our contributing guidelines:
