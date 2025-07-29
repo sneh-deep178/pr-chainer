@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle (dark theme) -->
+  <circle cx="20" cy="20" r="18" fill="#2B2B2B" stroke="#404040" stroke-width="2"/>
+  
+  <!-- Chain links (brighter for dark theme) -->
+  <circle cx="12" cy="12" r="6" fill="none" stroke="#5DADE2" stroke-width="2.5"/>
+  <circle cx="28" cy="28" r="6" fill="none" stroke="#5DADE2" stroke-width="2.5"/>
+  
+  <!-- Connecting chain -->
+  <path d="M16 16 L24 24" stroke="#5DADE2" stroke-width="2.5" fill="none"/>
+  
+  <!-- Git branch nodes (brighter green) -->
+  <circle cx="12" cy="20" r="2" fill="#58D68D"/>
+  <circle cx="20" cy="20" r="2" fill="#58D68D"/>
+  <circle cx="28" cy="20" r="2" fill="#58D68D"/>
+  
+  <!-- Branch lines -->
+  <path d="M12 20 L20 20 L28 20" stroke="#58D68D" stroke-width="2" fill="none"/>
+  
+  <!-- PR text (brighter for dark theme) -->
+  <text x="16" y="35" font-family="Arial, sans-serif" font-size="8" fill="#FF7979" font-weight="bold" text-anchor="middle">PR</text>
+</svg> 

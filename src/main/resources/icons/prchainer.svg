@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <!-- Chain link base -->
+  <circle cx="5" cy="5" r="3" fill="none" stroke="#4A90E2" stroke-width="1.5"/>
+  <circle cx="11" cy="11" r="3" fill="none" stroke="#4A90E2" stroke-width="1.5"/>
+  
+  <!-- Git branch symbol -->
+  <path d="M5 8 L8 8 L11 8" stroke="#7ED321" stroke-width="1.5" fill="none"/>
+  <circle cx="5" cy="8" r="1" fill="#7ED321"/>
+  <circle cx="8" cy="8" r="1" fill="#7ED321"/>
+  <circle cx="11" cy="8" r="1" fill="#7ED321"/>
+  
+  <!-- PR symbol -->
+  <text x="1" y="14" font-family="Arial, sans-serif" font-size="6" fill="#FF6B6B" font-weight="bold">PR</text>
+</svg> 

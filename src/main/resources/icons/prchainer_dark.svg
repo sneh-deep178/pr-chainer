@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <!-- Chain link base (lighter for dark theme) -->
+  <circle cx="5" cy="5" r="3" fill="none" stroke="#5DADE2" stroke-width="1.5"/>
+  <circle cx="11" cy="11" r="3" fill="none" stroke="#5DADE2" stroke-width="1.5"/>
+  
+  <!-- Git branch symbol (brighter green for dark theme) -->
+  <path d="M5 8 L8 8 L11 8" stroke="#58D68D" stroke-width="1.5" fill="none"/>
+  <circle cx="5" cy="8" r="1" fill="#58D68D"/>
+  <circle cx="8" cy="8" r="1" fill="#58D68D"/>
+  <circle cx="11" cy="8" r="1" fill="#58D68D"/>
+  
+  <!-- PR symbol (brighter for dark theme) -->
+  <text x="1" y="14" font-family="Arial, sans-serif" font-size="6" fill="#FF7979" font-weight="bold">PR</text>
+</svg> 

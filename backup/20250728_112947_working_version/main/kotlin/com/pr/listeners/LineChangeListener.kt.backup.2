@@ -1,0 +1,696 @@
+package com.example.listeners
+
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.project.guessProjectDir
+import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBTextArea
+import java.awt.BorderLayout
+import java.awt.Dimension
+import javax.swing.*
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.io.File
+
+class LineChangeListener(private val project: Project) : DocumentListener {
+    private var changeThreshold = 5  // Lowered for easier testing - now mutable
+    private val originalThreshold = 5  // Store the original threshold to reset to
+    private val debounceExecutor = Executors.newSingleThreadScheduledExecutor()
+    private var isDialogShowing = false  // Flag to prevent multiple dialogs
+    private var lastCancelTime = 0L  // Track when dialog was last cancelled
+    private val cancelCooldownMs = 10000L  // 10 seconds cooldown after cancel
+    
+    companion object {
+        private val LOG = thisLogger()
+    }
+
+    init {
+        LOG.info("PR Chainer: LineChangeListener init block called for project: ${project.name}")
+        try {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup("PR Chainer")
+                .createNotification("PR Chainer initialized for project: ${project.name}", NotificationType.INFORMATION)
+                .notify(project)
+            LOG.info("PR Chainer: Notification sent successfully")
+            
+            // Show initial status (disabled to avoid notification spam)
+            val projectDir = getProjectDirectory()
+            if (projectDir != null) {
+                val initialChanges = getTotalLineChangesFromGit(projectDir)
+                // updateStatusDisplay(initialChanges) // Disabled to avoid spam
+            }
+        } catch (e: Exception) {
+            LOG.error("PR Chainer: Failed to send notification", e)
+        }
+    }
+
+    override fun documentChanged(event: DocumentEvent) {
+        LOG.info("PR Chainer: Document changed event received")
+        // Debounce the change detection to avoid excessive Git calls (reduced to 500ms)
+        debounceExecutor.schedule({
+            checkRepositoryChanges()
+        }, 500, TimeUnit.MILLISECONDS)
+    }
+
+    private fun checkRepositoryChanges() {
+        LOG.info("PR Chainer: Checking repository changes...")
+        val projectDir = getProjectDirectory() ?: return
+        
+        // Force save all files before checking Git changes
+        forceSaveAllFiles()
+        
+        // Get total line changes across the repository since last commit
+        val totalChanges = getTotalLineChangesFromGit(projectDir)
+        
+        LOG.info("Total repository changes detected: $totalChanges lines (threshold: $changeThreshold)")
+        
+        // Show current status to user (disabled to avoid notification spam)
+        // updateStatusDisplay(totalChanges)
+        
+        // Check cooldown period after cancel
+        val currentTime = System.currentTimeMillis()
+        val timeSinceCancel = currentTime - lastCancelTime
+        
+        if (totalChanges >= changeThreshold && !isDialogShowing && timeSinceCancel > cancelCooldownMs) {
+            LOG.info("PR Chainer: Threshold crossed! Showing dialog for $totalChanges/$changeThreshold")
+            promptBranchCreation(totalChanges)
+        } else if (timeSinceCancel <= cancelCooldownMs) {
+            LOG.info("PR Chainer: Dialog suppressed due to cooldown (${(cancelCooldownMs - timeSinceCancel) / 1000}s remaining)")
+        } else if (totalChanges < changeThreshold) {
+            LOG.info("PR Chainer: Changes $totalChanges below threshold $changeThreshold")
+        } else if (isDialogShowing) {
+            LOG.info("PR Chainer: Dialog already showing, skipping")
+        }
+    }
+
+    private fun forceSaveAllFiles() {
+        try {
+            // Force save all modified files
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveAllDocuments()
+            LOG.info("PR Chainer: Force saved all files")
+            
+            // Add a small delay to ensure files are written to disk
+            Thread.sleep(100)
+            LOG.debug("PR Chainer: Waited 100ms for file system sync")
+            
+        } catch (e: Exception) {
+            LOG.warn("PR Chainer: Failed to force save files", e)
+        }
+    }
+
+    private fun updateStatusDisplay(currentChanges: Int) {
+        val percentage = if (changeThreshold > 0) (currentChanges * 100) / changeThreshold else 0
+        val statusIcon = when {
+            currentChanges == 0 -> "✅"
+            currentChanges <= changeThreshold / 2 -> "🟢"
+            currentChanges <= changeThreshold * 0.8 -> "🟡"
+            currentChanges <= changeThreshold -> "🟠"
+            else -> "🔴"
+        }
+        
+        val statusMessage = "$statusIcon PR Chainer: $currentChanges/$changeThreshold lines ($percentage%)"
+        
+        // Disabled notifications to avoid spam
+        // NotificationGroupManager.getInstance()
+        //     .getNotificationGroup("PR Chainer")
+        //     .createNotification(statusMessage, NotificationType.INFORMATION)
+        //     .notify(project)
+        
+        LOG.info("Status updated: $statusMessage")
+    }
+
+    private fun getProjectDirectory(): File? {
+        val projectDir = project.guessProjectDir()?.toNioPath()?.toFile()
+        if (projectDir == null || !File(projectDir, ".git").exists()) {
+            LOG.warn("Project directory not found or not a Git repository")
+            return null
+        }
+        return projectDir
+    }
+
+    private fun refreshChangeTracking() {
+        LOG.info("PR Chainer: Refreshing change tracking...")
+        
+        // Force a fresh check of changes without any cache
+        val projectDir = getProjectDirectory() ?: return
+        val freshChanges = getTotalLineChangesFromGit(projectDir)
+        
+        LOG.info("PR Chainer: Fresh change count after refresh: $freshChanges lines")
+        
+        // If there are still changes showing, it might be because of timing issues
+        // Schedule a delayed check to ensure Git state has settled
+        debounceExecutor.schedule({
+            val finalChanges = getTotalLineChangesFromGit(projectDir)
+            LOG.info("PR Chainer: Final change count after delay: $finalChanges lines (threshold: $changeThreshold)")
+        }, 2, TimeUnit.SECONDS)
+    }
+
+    private fun getTotalLineChangesFromGit(projectDir: File): Int {
+        return try {
+            LOG.info("PR Chainer: Running git diff HEAD --numstat")
+            
+            // Use --no-index to avoid any caching issues and get fresh results
+            val process = ProcessBuilder("git", "diff", "HEAD", "--numstat", "--no-ext-diff")
+                .directory(projectDir)
+                .start()
+            
+            val output = process.inputStream.bufferedReader().readText()
+            val error = process.errorStream.bufferedReader().readText()
+            process.waitFor()
+            
+            if (process.exitValue() != 0) {
+                LOG.warn("Git diff command failed. Error: $error")
+                return 0
+            }
+
+            LOG.info("PR Chainer: Git diff output: '$output'")
+
+            // Parse the output and sum all changes
+            var totalChanges = 0
+            output.lines().forEach { line ->
+                if (line.isNotBlank()) {
+                    val parts = line.trim().split("\t")
+                    if (parts.size >= 3) {
+                        val additions = parts[0].toIntOrNull() ?: 0
+                        val deletions = parts[1].toIntOrNull() ?: 0
+                        val fileName = parts[2]
+                        val fileChanges = additions + deletions
+                        totalChanges += fileChanges
+                        LOG.info("PR Chainer: File '$fileName': $additions additions, $deletions deletions, total: $fileChanges")
+                    }
+                }
+            }
+            
+            LOG.info("PR Chainer: Total changes calculated: $totalChanges")
+            
+            totalChanges
+        } catch (e: Exception) {
+            LOG.error("Error executing git diff command", e)
+            0
+        }
+    }
+
+    private fun promptBranchCreation(totalChanges: Int) {
+        val projectDir = getProjectDirectory() ?: return
+        val currentBranch = getCurrentBranch(projectDir) ?: "main"
+        
+        // Set flag to prevent multiple dialogs
+        isDialogShowing = true
+        
+        try {
+            // Special message for master branch
+            val branchMessage = if (currentBranch == "master") {
+                "⚠️ You're on the 'master' branch!\n\n📊 Status: $totalChanges/$changeThreshold lines (${(totalChanges * 100) / changeThreshold}%)\n\nThis will:\n1. Prompt you to enter a branch name\n2. Create a branch with your-name-1\n3. Move your changes to that branch\n4. Create another branch with incremented number\n5. Keep master clean and protected"
+            } else {
+                "📊 Status: $totalChanges/$changeThreshold lines (${(totalChanges * 100) / changeThreshold}%)\n\nRepository changes exceeded threshold!\n\nCommit current changes and create a new branch?"
+            }
+            
+            // Use custom options for better control
+            val options = arrayOf("Commit & Create Branch", "Increase Threshold (+5)", "Cancel & Increase Threshold")
+            val result = JOptionPane.showOptionDialog(
+                null,
+                branchMessage,
+                "Branch Threshold Exceeded",
+                JOptionPane.YES_NO_CANCEL_OPTION,
+                if (currentBranch == "master") JOptionPane.WARNING_MESSAGE else JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0] // Default to first option
+            )
+
+            when (result) {
+                0 -> { // Commit & Create Branch
+                    // Clear the dialog flag immediately to close this dialog
+                    isDialogShowing = false
+                    // Use SwingUtilities.invokeLater to ensure the current dialog closes first
+                    SwingUtilities.invokeLater {
+                        showFileSelectionDialog(projectDir, currentBranch)
+                    }
+                    return // Exit early to prevent the finally block from clearing the flag again
+                }
+                1 -> { // Increase Threshold
+                    // Get current changes at the time of button click, not stale totalChanges
+                    val currentChanges = getTotalLineChangesFromGit(projectDir)
+                    changeThreshold = currentChanges + 5  // Set to current changes + 5
+                    LOG.info("PR Chainer: User increased threshold to $changeThreshold (current $currentChanges + 5)")
+                    
+                    // Update status display with new threshold (disabled to avoid spam)
+                    // updateStatusDisplay(currentChanges)
+                    
+                    showInfo("Threshold increased to $changeThreshold lines. You can continue working.")
+                }
+                2, JOptionPane.CLOSED_OPTION -> { // Cancel or X button
+                    LOG.info("PR Chainer: User cancelled the operation")
+                    
+                    // Get current changes at the time of button click, not stale totalChanges
+                    val currentChanges = getTotalLineChangesFromGit(projectDir)
+                    changeThreshold = currentChanges + 5  // Same logic as "Increase Threshold (+5)"
+                    LOG.info("PR Chainer: Threshold increased to $changeThreshold (current $currentChanges + 5)")
+                    
+                    showInfo("Cancelled. Threshold increased to $changeThreshold lines. You can continue working.")
+                    lastCancelTime = System.currentTimeMillis() // Update last cancel time
+                }
+            }
+        } finally {
+            // Always clear the flag when dialog is done
+            isDialogShowing = false
+        }
+    }
+
+    private fun showFileSelectionDialog(projectDir: File, currentBranch: String) {
+        // Set the dialog flag to prevent other dialogs
+        isDialogShowing = true
+        
+        SwingUtilities.invokeLater {
+            val dialog = FileSelectionDialog(projectDir, currentBranch)
+            dialog.showAndGet() // Just show the dialog, it handles everything internally
+            
+            // Always clear the dialog flag when this dialog is completely done
+            isDialogShowing = false
+        }
+    }
+
+    private inner class FileSelectionDialog(
+        private val projectDir: File,
+        private val currentBranch: String
+    ) : DialogWrapper(project) {
+        
+        private val commitMessageArea = JBTextArea(3, 50)
+        private val fileCheckboxes = mutableListOf<JBCheckBox>()
+        private val changedFiles = getChangedFiles(projectDir)
+        private val progressLabel = JLabel(" ")
+        private var isProcessing = false
+        
+        init {
+            title = "Select Files and Commit Message"
+            setOKButtonText("Commit & Create Branch")
+            setCancelButtonText("Cancel")
+            init()
+        }
+        
+        override fun createCenterPanel(): JComponent {
+            val panel = JPanel(BorderLayout())
+            
+            // Commit message section
+            val messagePanel = JPanel(BorderLayout())
+            messagePanel.add(JLabel("Commit Message:"), BorderLayout.NORTH)
+            commitMessageArea.text = "Auto-commit: Changes exceeded threshold"
+            commitMessageArea.lineWrap = true
+            commitMessageArea.wrapStyleWord = true
+            messagePanel.add(JBScrollPane(commitMessageArea), BorderLayout.CENTER)
+            
+            // Files section
+            val filesPanel = JPanel(BorderLayout())
+            filesPanel.add(JLabel("Select files to commit:"), BorderLayout.NORTH)
+            
+            val fileListPanel = JPanel()
+            fileListPanel.layout = BoxLayout(fileListPanel, BoxLayout.Y_AXIS)
+            
+            if (changedFiles.isEmpty()) {
+                fileListPanel.add(JLabel("No changed files detected"))
+            } else {
+                changedFiles.forEach { file ->
+                    val checkbox = JBCheckBox(file, true) // Pre-select all files
+                    fileCheckboxes.add(checkbox)
+                    fileListPanel.add(checkbox)
+                }
+            }
+            
+            val scrollPane = JBScrollPane(fileListPanel)
+            scrollPane.preferredSize = Dimension(500, 200)
+            filesPanel.add(scrollPane, BorderLayout.CENTER)
+            
+            // Progress section
+            val progressPanel = JPanel(BorderLayout())
+            progressLabel.foreground = java.awt.Color.BLUE
+            progressPanel.add(progressLabel, BorderLayout.CENTER)
+            
+            // Combine panels
+            panel.add(messagePanel, BorderLayout.NORTH)
+            panel.add(filesPanel, BorderLayout.CENTER)
+            panel.add(progressPanel, BorderLayout.SOUTH)
+            
+            return panel
+        }
+        
+        override fun doOKAction() {
+            if (isProcessing) return // Prevent multiple clicks
+            
+            // Validate before processing
+            if (getSelectedFiles().isEmpty()) {
+                Messages.showErrorDialog(project, "Please select at least one file to commit.", "No Files Selected")
+                return
+            }
+            
+            if (getCommitMessage().isBlank()) {
+                Messages.showErrorDialog(project, "Please provide a commit message.", "No Commit Message")
+                return
+            }
+            
+            // Start processing
+            startProcessing()
+        }
+        
+        private fun startProcessing() {
+            isProcessing = true
+            
+            // Disable buttons and show loading
+            okAction.isEnabled = false
+            cancelAction.isEnabled = false
+            progressLabel.text = "🔄 Processing... Please wait..."
+            
+            // Run Git operations in background thread
+            SwingUtilities.invokeLater {
+                Thread {
+                    try {
+                        val selectedFiles = getSelectedFiles()
+                        val commitMessage = getCommitMessage()
+                        
+                        // Update progress
+                        SwingUtilities.invokeLater {
+                            progressLabel.text = "📁 Staging files..."
+                        }
+                        
+                        // Stage selected files
+                        selectedFiles.forEach { file ->
+                            executeGitCommand(projectDir, listOf("add", file))
+                        }
+                        
+                        SwingUtilities.invokeLater {
+                            progressLabel.text = "💾 Committing changes..."
+                        }
+                        
+                        // Commit changes
+                        executeGitCommand(projectDir, listOf("commit", "-m", commitMessage))
+                        
+                        // Check if remote 'origin' exists
+                        val hasOrigin = hasRemoteOrigin(projectDir)
+                        
+                        // Handle master branch specially
+                        if (currentBranch == "master") {
+                            SwingUtilities.invokeLater {
+                                progressLabel.text = "🌿 Creating master branch workflow..."
+                                handleMasterBranch(hasOrigin)
+                            }
+                        } else {
+                            SwingUtilities.invokeLater {
+                                progressLabel.text = "🌿 Creating new branch..."
+                                handleOtherBranch(hasOrigin)
+                            }
+                        }
+                        
+                    } catch (e: Exception) {
+                        LOG.error("Error during branch creation workflow", e)
+                        SwingUtilities.invokeLater {
+                            progressLabel.text = "❌ Error: ${e.message}"
+                            showError("An error occurred: ${e.message}")
+                            resetDialog()
+                        }
+                    }
+                }.start()
+            }
+        }
+        
+        private fun handleMasterBranch(hasOrigin: Boolean) {
+            try {
+                // Prompt user for branch name
+                val userBranchName = JOptionPane.showInputDialog(
+                    this.contentPanel,
+                    "Enter a name for the new branch:",
+                    "Branch Name",
+                    JOptionPane.QUESTION_MESSAGE
+                )
+                
+                if (userBranchName.isNullOrBlank()) {
+                    progressLabel.text = "❌ Branch name cannot be empty"
+                    resetDialog()
+                    return
+                }
+                
+                progressLabel.text = "🌿 Creating branch '$userBranchName-1'..."
+                
+                // Create first branch with user's name + -1
+                val firstBranchName = "$userBranchName-1"
+                executeGitCommand(projectDir, listOf("checkout", "-b", firstBranchName))
+                
+                // Push first branch if origin exists
+                if (hasOrigin) {
+                    progressLabel.text = "⬆️ Pushing branch '$firstBranchName'..."
+                    executeGitCommand(projectDir, listOf("push", "-u", "origin", firstBranchName))
+                }
+                
+                progressLabel.text = "🌿 Creating next branch..."
+                
+                // Create another branch from the first branch
+                val nextBranchName = generateNewBranchName(projectDir, firstBranchName)
+                executeGitCommand(projectDir, listOf("checkout", "-b", nextBranchName))
+                
+                // Reset threshold
+                changeThreshold = originalThreshold
+                LOG.info("PR Chainer: Threshold reset to original value: $originalThreshold")
+                
+                // Force refresh of change tracking
+                refreshChangeTracking()
+                
+                // Show success
+                progressLabel.text = "✅ Success! Now on branch '$nextBranchName'"
+                
+                val message = if (hasOrigin) {
+                    "✅ Master protected! Created branch '$firstBranchName' and switched to '$nextBranchName'"
+                } else {
+                    "✅ Created branch '$firstBranchName' and switched to '$nextBranchName' (local only)"
+                }
+                
+                showSuccess(message)
+                showInfo("Workflow: master → $firstBranchName → $nextBranchName (current)")
+                
+                // Close dialog immediately after success
+                SwingUtilities.invokeLater {
+                    close(OK_EXIT_CODE) // Close dialog immediately
+                }
+                
+            } catch (e: Exception) {
+                progressLabel.text = "❌ Error in master branch workflow"
+                showError("Master branch workflow error: ${e.message}")
+                resetDialog()
+            }
+        }
+        
+        private fun handleOtherBranch(hasOrigin: Boolean) {
+            try {
+                // Push current branch
+                if (hasOrigin) {
+                    progressLabel.text = "⬆️ Pushing current branch..."
+                    executeGitCommand(projectDir, listOf("push", "origin", currentBranch))
+                }
+                
+                progressLabel.text = "🌿 Creating new branch..."
+                
+                // Create new branch
+                val newBranchName = generateNewBranchName(projectDir, currentBranch)
+                executeGitCommand(projectDir, listOf("checkout", "-b", newBranchName))
+                
+                // Reset threshold
+                changeThreshold = originalThreshold
+                LOG.info("PR Chainer: Threshold reset to original value: $originalThreshold")
+                
+                // Force refresh of change tracking
+                refreshChangeTracking()
+                
+                // Show success
+                progressLabel.text = "✅ Success! Now on branch '$newBranchName'"
+                
+                val message = if (hasOrigin) {
+                    "✅ Successfully pushed and switched to branch '$newBranchName'"
+                } else {
+                    "✅ Created and switched to branch '$newBranchName' (local only)"
+                }
+                
+                showSuccess(message)
+                
+                // Close dialog immediately after success
+                SwingUtilities.invokeLater {
+                    close(OK_EXIT_CODE) // Close dialog immediately
+                }
+                
+            } catch (e: Exception) {
+                progressLabel.text = "❌ Error in branch workflow"
+                showError("Branch workflow error: ${e.message}")
+                resetDialog()
+            }
+        }
+        
+        private fun resetDialog() {
+            isProcessing = false
+            okAction.isEnabled = true
+            cancelAction.isEnabled = true
+            progressLabel.text = " "
+        }
+        
+        override fun doCancelAction() {
+            if (isProcessing) {
+                // Don't allow cancel during processing
+                return
+            }
+            super.doCancelAction() // This will close the dialog
+            // lastCancelTime is handled in the main dialog flow
+        }
+        
+        fun getSelectedFiles(): List<String> {
+            return fileCheckboxes.filter { it.isSelected }.map { it.text }
+        }
+        
+        fun getCommitMessage(): String {
+            return commitMessageArea.text.trim()
+        }
+    }
+
+    private fun getChangedFiles(projectDir: File): List<String> {
+        return try {
+            val process = ProcessBuilder("git", "diff", "HEAD", "--name-only")
+                .directory(projectDir)
+                .start()
+            
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            
+            if (process.exitValue() == 0) {
+                output.lines().filter { it.isNotBlank() }
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            LOG.error("Error getting changed files", e)
+            emptyList()
+        }
+    }
+
+    private fun executeGitCommand(projectDir: File, command: List<String>): String {
+        val fullCommand = listOf("git") + command
+        val process = ProcessBuilder(fullCommand)
+            .directory(projectDir)
+            .start()
+        
+        val output = process.inputStream.bufferedReader().readText()
+        val error = process.errorStream.bufferedReader().readText()
+        process.waitFor()
+        
+        if (process.exitValue() != 0) {
+            throw RuntimeException("Git command failed: ${fullCommand.joinToString(" ")}\nError: $error")
+        }
+        
+        return output
+    }
+
+    private fun getCurrentBranch(projectDir: File): String? {
+        return try {
+            executeGitCommand(projectDir, listOf("branch", "--show-current")).trim()
+        } catch (e: Exception) {
+            LOG.warn("Failed to get current branch name", e)
+            null
+        }
+    }
+
+    private fun generateNewBranchName(projectDir: File, baseBranch: String): String {
+        return try {
+            // Get username from git config
+            val username = getGitUsername(projectDir)
+            
+            // Get repository name from the project directory
+            val repoName = projectDir.name
+            
+            if (baseBranch == "master") {
+                // For master: repo-master-username-1, repo-master-username-2, etc.
+                val branchPrefix = "$repoName-master-$username"
+                
+                // Get all branches to find the next number
+                val output = executeGitCommand(projectDir, listOf("branch", "-a"))
+                val branches = output.lines()
+                    .map { it.trim().removePrefix("* ").removePrefix("remotes/origin/") }
+                    .filter { it.startsWith("$branchPrefix-") }
+                
+                val numbers = branches.mapNotNull { branch ->
+                    val suffix = branch.removePrefix("$branchPrefix-")
+                    suffix.toIntOrNull()
+                }
+                
+                val nextNumber = if (numbers.isEmpty()) 1 else numbers.maxOrNull()!! + 1
+                "$branchPrefix-$nextNumber"
+            } else {
+                // For non-master branches
+                val lastDashIndex = baseBranch.lastIndexOf('-')
+                
+                if (lastDashIndex != -1) {
+                    val possibleNumber = baseBranch.substring(lastDashIndex + 1)
+                    if (possibleNumber.toIntOrNull() != null) {
+                        // Branch has a number at the end, increment it
+                        val baseWithoutNumber = baseBranch.substring(0, lastDashIndex)
+                        val currentNumber = possibleNumber.toInt()
+                        "$baseWithoutNumber-${currentNumber + 1}"
+                    } else {
+                        // Branch has a dash but no number, add -1
+                        "$baseBranch-1"
+                    }
+                } else {
+                    // Branch has no dash, add -1
+                    "$baseBranch-1"
+                }
+            }
+        } catch (e: Exception) {
+            LOG.warn("Failed to generate branch name", e)
+            "$baseBranch-1"
+        }
+    }
+
+    private fun getGitUsername(projectDir: File): String {
+        return try {
+            val output = executeGitCommand(projectDir, listOf("config", "user.name"))
+            output.trim().replace(" ", "-").lowercase()
+        } catch (e: Exception) {
+            LOG.warn("Failed to get git username, using default", e)
+            "user"
+        }
+    }
+
+    private fun hasRemoteOrigin(projectDir: File): Boolean {
+        return try {
+            val output = executeGitCommand(projectDir, listOf("remote", "-v"))
+            output.contains("origin")
+        } catch (e: Exception) {
+            LOG.warn("Failed to check for origin remote", e)
+            false
+        }
+    }
+
+    private fun showSuccess(message: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("PR Chainer")
+            .createNotification(message, NotificationType.INFORMATION)
+            .notify(project)
+        
+        JOptionPane.showMessageDialog(null, message, "Success", JOptionPane.INFORMATION_MESSAGE)
+    }
+
+    private fun showError(message: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("PR Chainer")
+            .createNotification("Error: $message", NotificationType.ERROR)
+            .notify(project)
+        
+        JOptionPane.showMessageDialog(null, message, "Error", JOptionPane.ERROR_MESSAGE)
+    }
+
+    private fun showInfo(message: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("PR Chainer")
+            .createNotification(message, NotificationType.INFORMATION)
+            .notify(project)
+    }
+}
