@@ -310,7 +310,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: [GitHub Issues](https://github.com/yourorg/pr-chainer/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/yourorg/pr-chainer/discussions)
-- **Email**: support@yourcompany.com
+- **Email**: sneh.deep@razorpay.com
 
 ---
 
